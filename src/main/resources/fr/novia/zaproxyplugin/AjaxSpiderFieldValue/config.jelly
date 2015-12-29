@@ -24,32 +24,21 @@ SOFTWARE.
 
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:d="jelly:define" xmlns:l="/lib/layout" xmlns:t="/lib/hudson" xmlns:f="/lib/form">
-	<!--
-	This Jelly script is used to produce the global configuration option.
-
-	Jenkins uses a set of tag libraries to provide uniformity in forms.
-	To determine where this tag is defined, first check the namespace URI,
-	and then look under $JENKINS/views/. For example, <f:section> is defined
-	in $JENKINS/views/lib/form/section.jelly.
-
-	It's also often useful to just check other similar scripts to see what
-	tags they use. Views are always organized according to its owner class,
-	so it should be straightforward to find them.
-	-->
-	<f:section title="ZAProxy">
-		<f:entry title="${%ZAProxy Host}" field="zapProxyDefaultHost">
-			<f:textbox default="localhost" clazz="required" />
-		</f:entry>
-
-		<f:entry title="${%ZAProxy Port}" field="zapProxyDefaultPort">
-			<f:number default="8090" clazz="required positive-number" />
-		</f:entry>
-		
-		<f:optionalBlock title="${%Lunch Local ZAProxy}" field="zapProxyLocalLaunch" inline="true">
-			<f:entry title="${%ZAProxy Home}" field="zapProxyDefaultHome">
-				<f:textbox default="ZAPROXY_HOME" clazz="required"/>
-			</f:entry>
-		</f:optionalBlock>
-		
-	</f:section>
+	
+	<f:entry help="/descriptor/fr.novia.zaproxyplugin.AjaxSpiderFieldValue/help/config">
+		<table width="100%">
+			<tr>
+				<th>${%Field Name}</th>
+				<th>${%Field value}</th>
+			</tr>
+			<tr>
+				<td><f:textbox field="field"/></td>
+				<td><f:textbox field="value"/></td>
+			</tr>
+			<tr>
+				<td colspan="2" align="right"><f:repeatableDeleteButton value="${%Delete}"/></td>
+			</tr>
+		</table>
+	</f:entry>
+	
 </j:jelly>

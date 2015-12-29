@@ -33,56 +33,39 @@ import hudson.FilePath.FileCallable;
 import hudson.Launcher;
 import hudson.model.AbstractDescribableImpl;
 import hudson.model.BuildListener;
-import hudson.model.EnvironmentSpecific;
 import hudson.model.AbstractBuild;
-import hudson.model.AbstractProject;
 import hudson.model.Computer;
 import hudson.model.Descriptor;
 import hudson.model.JDK;
 import hudson.model.Node;
 import hudson.remoting.VirtualChannel;
-import hudson.slaves.NodeSpecific;
 import hudson.slaves.SlaveComputer;
-import hudson.tools.ToolDescriptor;
-import hudson.tools.ToolInstallation;
-import hudson.util.FormValidation;
-import hudson.util.ListBoxModel;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FilenameFilter;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
-import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
-import java.net.Proxy;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.net.URL;
 import java.net.URLEncoder;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import jenkins.model.Jenkins;
-
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.FilenameUtils;
-import org.apache.commons.io.filefilter.FileFilterUtils;
-import org.apache.commons.io.filefilter.TrueFileFilter;
 import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.tools.ant.BuildException;
 import org.jenkinsci.remoting.RoleChecker;
 import org.kohsuke.stapler.DataBoundConstructor;
-import org.kohsuke.stapler.QueryParameter;
 import org.zaproxy.clientapi.core.ApiResponse;
 import org.zaproxy.clientapi.core.ApiResponseElement;
+import org.zaproxy.clientapi.core.ApiResponseList;
+import org.zaproxy.clientapi.core.ApiResponseSet;
 import org.zaproxy.clientapi.core.ClientApi;
 import org.zaproxy.clientapi.core.ClientApiException;
 //import org.parosproxy.paros.CommandLine;
@@ -99,7 +82,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	private static final long serialVersionUID = 3381268691497579059L;
 
 	private static final String API_KEY = "ZAPROXY-PLUGIN";
-	
+	private static final String REPORT_PREFIX = "ZAP";
 	private static final int MILLISECONDS_IN_SECOND = 1000;
 	public static final String FILE_POLICY_EXTENSION = ".policy";
 	public static final String FILE_SESSION_EXTENSION = ".session";
@@ -112,6 +95,8 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	private static final String CMD_LINE_CONFIG = "-config";
 	private static final String CMD_LINE_API_KEY = "api.key";
 	
+	private static final int TimeoutInSec = 60;
+	
 	// TODO Do import when zap-2.4.0.jar will contain the correct API version
 //	public static final String CMD_LINE_DIR = CommandLine.DIR;
 //	public static final String CMD_LINE_CONFIG = CommandLine.CONFIG;
@@ -122,7 +107,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	private static final String ZAP_PROG_NAME_BAT = "zap.bat";
 	private static final String ZAP_PROG_NAME_SH = "zap.sh";
 
-
+	private static final String SCRIPT_NAME = "common-auth-json";
 	
 	/** Host configured when ZAProxy is used as proxy */
 	private String zapProxyHost;
@@ -130,48 +115,26 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	/** Port configured when ZAProxy is used as proxy */
 	private int zapProxyPort;
 	
+	/** Environment variable about ZAProxy path */
+	private String zapProxyHome;
+	
 	/** Path to the ZAProxy program */
 	private String zapProgram;
 	
-	/** Indicate if ZAProxy is automatically installed by Jenkins or if it is already install on the machine */
-	private final boolean autoInstall;
-	
-	/** The ZAproxy tool to use */
-	private final String toolUsed;
-	
-	/** Environment variable about ZAProxy path */
-	private final String zapHome;
+	private boolean zapProxyLocalLaunch;
 	
 	/** Time total to wait for zap initialization. After this time, the program is stopped */
-	private final int timeoutInSec;
-
-	/** Filename to load ZAProxy session. Contains the absolute path to the session */
-	private final String filenameLoadSession;
 	
 	/** URL to attack by ZAProxy */
 	private final String targetURL;
+	private final String includeURLs;
+	private final String excludeURLs;
 	
 	/** Realize a url spider or not by ZAProxy */
 	private final boolean spiderURL;
-
-	/** Realize a url spider as user or not by ZAProxy */
-	private final boolean spiderAsUser;
-
-	/** Authentication information for conduct spider as a user*/
-	/** user name for authentication*/
-	private final String username;
-
-	/** Password for the defined user */
-	private final String password;
 	
-	/** username post data parameter*/
-	private final String usernameParameter;
+	private final boolean ajaxSpiderURL;
 	
-	/** password post data parameter*/
-	private final String passwordParameter;
-
-	/** loggin url**/
-	private final String loginUrl;
 
 	/** logged in indication*/
 	private final String loggedInIndicator;
@@ -182,153 +145,37 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	/** Id of the newly created user*/
 	private String userId;
 
-	/** Realize a url AjaxSpider or not by ZAProxy */
-	private final boolean ajaxSpiderURL;
-	
 	/** Realize a url scan or not by ZAProxy */
 	private final boolean scanURL;
 	
-	/** Save reports or not */
-	private final boolean saveReports;
-
-	/** List of chosen format for reports.
-	 * ArrayList because it needs to be Serializable (whereas List is not Serializable)
-	 */
-	private final ArrayList<String> chosenFormats;
+	private final ArrayList<AuthenticationStep> authenticationSteps;
+	private final ArrayList<AjaxSpiderFieldValue> ajaxSpiderFieldValues;
 	
-	/** Filename for ZAProxy reports. It can contain a relative path. */
-	private final String filenameReports;
-	
-	/** Save session or not */
-	private final boolean saveSession;
-	
-	/** Filename to save ZAProxy session. It can contain a relative path. */
-	private final String filenameSaveSession;
-	
-	/** The default directory that ZAP uses */
-	private final String zapDefaultDir;
-	
-	/** The file policy to use for the scan. It contains only the policy name (without extension) */
-	private final String chosenPolicy;
-	
-	/** List of all ZAP command lines specified by the user 
-	 * ArrayList because it needs to be Serializable (whereas List is not Serializable)
-	 */
-	private final ArrayList<ZAPcmdLine> cmdLinesZAP;
-	
-	/** The jdk to use to start ZAProxy */
-	private final String jdk;
-
-	/**
-     * @deprecated
-     * Old constructor 
-     */
-	@Deprecated
-	public ZAProxy(boolean autoInstall, String toolUsed, String zapHome, int timeoutInSec,
-			String filenameLoadSession, String targetURL, boolean spiderURL, boolean scanURL,
-			boolean saveReports, List<String> chosenFormats, String filenameReports,
-			boolean saveSession, String filenameSaveSession,
-			String zapDefaultDir, String chosenPolicy,
-			List<ZAPcmdLine> cmdLinesZAP, String jdk) {
-		
-		this.autoInstall = autoInstall;
-		this.toolUsed = toolUsed;
-		this.zapHome = zapHome;
-		this.timeoutInSec = timeoutInSec;
-		this.filenameLoadSession = filenameLoadSession;
-		this.targetURL = targetURL;
-		this.spiderURL = spiderURL;
-		this.scanURL = scanURL;
-		this.saveReports = saveReports;
-		this.chosenFormats = chosenFormats != null ? new ArrayList<String>(chosenFormats) : new ArrayList<String>();
-		this.filenameReports = filenameReports;
-		this.saveSession = saveSession;
-		this.filenameSaveSession = filenameSaveSession;
-		this.zapDefaultDir = zapDefaultDir;
-		this.chosenPolicy = chosenPolicy;
-		this.cmdLinesZAP = cmdLinesZAP != null ? new ArrayList<ZAPcmdLine>(cmdLinesZAP) : new ArrayList<ZAPcmdLine>();
-		this.ajaxSpiderURL=false;
-		this.jdk = jdk;
-		
-		this.spiderAsUser=false;
-		this.username="";
-		this.password="";
-		this.usernameParameter="";
-		this.passwordParameter="";
-		this.loginUrl="";
-		this.loggedInIndicator="";
-
-		System.out.println(this.toString());
-	}
-
 	@DataBoundConstructor
-	public ZAProxy(boolean autoInstall, String toolUsed, String zapHome, int timeoutInSec,
-			String filenameLoadSession, String targetURL, boolean spiderURL, boolean spiderAsUser, boolean ajaxSpiderURL, 
-			boolean scanURL, boolean saveReports, List<String> chosenFormats, String filenameReports,
-			boolean saveSession, String filenameSaveSession, String zapDefaultDir, String chosenPolicy,
-			List<ZAPcmdLine> cmdLinesZAP, String jdk, String username, String password, String usernameParameter, 
-			String passwordParameter, String loginUrl, String loggedInIndicator) {
-		
-		this.autoInstall = autoInstall;
-		this.toolUsed = toolUsed;
-		this.zapHome = zapHome;
-		this.timeoutInSec = timeoutInSec;
-		this.filenameLoadSession = filenameLoadSession;
+	public ZAProxy(String targetURL, String includeURLs,  String excludeURLs, boolean spiderURL, boolean scanURL, boolean authentication, List<AuthenticationStep> authenticationSteps, String loggedInIndicator, boolean ajaxSpiderURL, List<AjaxSpiderFieldValue> ajaxSpiderFieldValues) {
 		this.targetURL = targetURL;
+		this.includeURLs = includeURLs;
+		this.excludeURLs = excludeURLs;
 		this.spiderURL = spiderURL;
-		this.ajaxSpiderURL=ajaxSpiderURL;
 		this.scanURL = scanURL;
-		this.saveReports = saveReports;
-		this.chosenFormats = chosenFormats != null ? new ArrayList<String>(chosenFormats) : new ArrayList<String>();
-		this.filenameReports = filenameReports;
-		this.saveSession = saveSession;
-		this.filenameSaveSession = filenameSaveSession;
-		this.zapDefaultDir = zapDefaultDir;
-		this.chosenPolicy = chosenPolicy;
-		this.cmdLinesZAP = cmdLinesZAP != null ? new ArrayList<ZAPcmdLine>(cmdLinesZAP) : new ArrayList<ZAPcmdLine>();
+		this.ajaxSpiderURL = ajaxSpiderURL;
 		
-		this.spiderAsUser=spiderAsUser;
-		this.username=username;
-		this.password=password;
-		this.usernameParameter=usernameParameter;
-		this.passwordParameter=passwordParameter;
-		this.loginUrl=loginUrl;
-		this.loggedInIndicator=loggedInIndicator;
-
-		this.jdk = jdk;
-		System.out.println(this.toString());
+		this.authenticationSteps = authenticationSteps != null ? new ArrayList<AuthenticationStep>(authenticationSteps) : new ArrayList<AuthenticationStep>();
+		this.ajaxSpiderFieldValues = ajaxSpiderFieldValues != null ? new ArrayList<AjaxSpiderFieldValue>(ajaxSpiderFieldValues) : new ArrayList<AjaxSpiderFieldValue>();
+		
+		this.loggedInIndicator = loggedInIndicator;
 	}
 	
 	@Override
 	public String toString() {
 		String s = "";
-		s += "autoInstall ["+autoInstall+"]\n";
-		s += "toolUsed ["+toolUsed+"]\n";
-		s += "zapHome ["+zapHome+"]\n";
-		s += "timeoutInSec ["+timeoutInSec+"]\n";
-		s += "filenameLoadSession ["+filenameLoadSession+"]\n";
+		s += "zapProxyHome ["+zapProxyHome+"]\n";
 		s += "targetURL ["+targetURL+"]\n";
 		s += "spiderURL ["+spiderURL+"]\n";
-		s += "spider as user ["+spiderAsUser+"]\n";
-		s += "usernameParameter ["+usernameParameter+"]\n";
-		s += "username ["+username+"]\n";
-		s += "passwordParameter ["+passwordParameter+"]\n";
-		s += "loginUrl ["+loginUrl+"]\n";
 		s += "loggedInIndicator ["+loggedInIndicator+"]\n";
-		s += "ajaxSpiderURL ["+ajaxSpiderURL+"]\n";
 		s += "scanURL ["+scanURL+"]\n";
-		s += "saveReports ["+saveReports+"]\n";
-		s += "chosenFormats ["+chosenFormats+"]\n";
-		s += "filenameReports ["+filenameReports+"]\n";
-		s += "saveSession ["+saveSession+"]\n";
-		s += "filenameSaveSession ["+filenameSaveSession+"]\n";
-		s += "zapDefaultDir ["+zapDefaultDir+"]\n";
-		s += "chosenPolicy ["+chosenPolicy+"]\n";
-		
 		s += "zapProxyHost ["+zapProxyHost+"]\n";
 		s += "zapProxyPort ["+zapProxyPort+"]\n";
-		
-		s+= "jdk ["+jdk+"]";
 		
 		return s;
 	}
@@ -344,68 +191,32 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	/*
 	 * Getters allows to load members variables into UI.
 	 */
-	public boolean getAutoInstall() {
-		return autoInstall;
+	public String getZapProxyHome() {
+		return zapProxyHome;
 	}
 
-	public String getToolUsed() {
-		return toolUsed;
-	}
-
-	public String getZapHome() {
-		return zapHome;
-	}
-
-	public int getTimeoutInSec() {
-		return timeoutInSec;
-	}
-
-	public String getFilenameLoadSession() {
-		return filenameLoadSession;
+	public void setZapProxyHome(String zapProxyHome) {
+		this.zapProxyHome = zapProxyHome;
 	}
 
 	public String getTargetURL() {
 		return targetURL;
 	}
 
+	public String getIncludeURLs() {
+		return includeURLs;
+	}
+
+	public String getExcludeURLs() {
+		return excludeURLs;
+	}
+
 	public boolean getSpiderURL() {
 		return spiderURL;
 	}
 
-	public boolean getAjaxSpiderURL() {
-		return ajaxSpiderURL;
-	}
-
 	public boolean getScanURL() {
 		return scanURL;
-	}
-
-	public boolean getSaveReports() {
-		return saveReports;
-	}
-
-	public List<String> getChosenFormats() {
-		return chosenFormats;
-	}
-
-	public String getFilenameReports() {
-		return filenameReports;
-	}
-
-	public boolean getSaveSession() {
-		return saveSession;
-	}
-
-	public String getFilenameSaveSession() {
-		return filenameSaveSession;
-	}
-
-	public String getZapDefaultDir() {
-		return zapDefaultDir;
-	}
-	
-	public String getChosenPolicy() {
-		return chosenPolicy;
 	}
 
 	public void setZapProxyHost(String zapProxyHost) {
@@ -415,121 +226,27 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	public void setZapProxyPort(int zapProxyPort) {
 		this.zapProxyPort = zapProxyPort;
 	}
-	
-	public List<ZAPcmdLine> getCmdLinesZAP() {
-		return cmdLinesZAP;
+
+	public void setZapProxyLocalLaunch(boolean zapProxyLocalLaunch) {
+		this.zapProxyLocalLaunch = zapProxyLocalLaunch;
 	}
 
-	public boolean getSpiderAsUser() {
-		return spiderAsUser;
+	public ArrayList<AuthenticationStep> getAuthenticationSteps() {
+		return authenticationSteps;
 	}
 
-	public String  getUsernameParameter() {
-		return usernameParameter;
+	public boolean isAjaxSpiderURL() {
+		return ajaxSpiderURL;
 	}
 
-	public String  getpasswordParameter() {
-		return passwordParameter;
-	}
-	
-	public String  getusername() {
-		return username;
-	}
-
-	public String getpassword() {
-		return password;
-	}
-
-	public String getLoginUrl() {
-		return loginUrl;
+	public ArrayList<AjaxSpiderFieldValue> getAjaxSpiderFieldValues() {
+		return ajaxSpiderFieldValues;
 	}
 
 	public String getLoggedInIndicator() {
 		return loggedInIndicator;
 	}
-	/**
-	 * Gets the JDK that this Sonar builder is configured with, or null.
-	 */
-	public JDK getJDK() {
-		return Jenkins.getInstance().getJDK(jdk);
-	}
 
-	public String getJdk() {
-		return jdk;
-	}
-
-	/**
-	 * Get the ZAP_HOME setup by Custom Tools Plugin or already present on the build's machine. 
-	 * 
-	 * @param build
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @return the installed tool location, without zap.bat or zap.sh at the end
-	 * @throws InterruptedException 
-	 * @throws IOException 
-	 * @see <a href="https://groups.google.com/forum/#!topic/jenkinsci-dev/RludxaYjtDk">
-	 * 	https://groups.google.com/forum/#!topic/jenkinsci-dev/RludxaYjtDk</a>
-	 */
-	private String retrieveZapHomeWithToolInstall(AbstractBuild<?, ?> build, BuildListener listener) 
-			throws IOException, InterruptedException {	
-		
-		EnvVars env = null;
-		Node node = null;
-		String installPath = null;
-			
-		if(autoInstall) {
-			env = build.getEnvironment(listener);
-			node = build.getBuiltOn();
-			for (ToolDescriptor<?> desc : ToolInstallation.all()) {
-				for (ToolInstallation tool : desc.getInstallations()) {
-					if (tool.getName().equals(toolUsed)) {
-						if (tool instanceof NodeSpecific) {
-							tool = (ToolInstallation) ((NodeSpecific<?>) tool).forNode(node, listener);
-						}
-						if (tool instanceof EnvironmentSpecific) {
-							tool = (ToolInstallation) ((EnvironmentSpecific<?>) tool).forEnvironment(env);
-						}
-						installPath = tool.getHome();
-						
-						return installPath;
-					}
-				}
-			}
-		} else {
-			installPath = build.getEnvironment(listener).get(zapHome);
-		}
-		return installPath;
-	}
-	
-	/**
-	 * Return the ZAProxy program name (zap.bat or zap.sh) depending of the build node and the OS.
-	 * 
-	 * @param build
-	 * @return the ZAProxy program name (zap.bat or zap.sh)
-	 * @throws IOException
-	 * @throws InterruptedException
-	 */
-	private String getZAPProgramName(AbstractBuild<?, ?> build) throws IOException, InterruptedException {
-		Node node = build.getBuiltOn();
-		String zapProgramName = "";
-		
-		// Append zap program following Master/Slave and Windows/Unix
-		if( "".equals(node.getNodeName())) { // Master
-			if( File.pathSeparatorChar == ':' ) { // UNIX
-				zapProgramName = ZAP_PROG_NAME_SH;
-			} else { // Windows (pathSeparatorChar == ';')
-				zapProgramName = ZAP_PROG_NAME_BAT;
-			}
-		} 
-		else { // Slave
-			if( "Unix".equals(((SlaveComputer)node.toComputer()).getOSDescription()) ) {
-				zapProgramName = ZAP_PROG_NAME_SH;
-			} else {
-				zapProgramName = ZAP_PROG_NAME_BAT;
-			}
-		}
-		return zapProgramName;
-	}
-	
 	/**
 	 * Return the ZAProxy program name with separator prefix (\zap.bat or /zap.sh) depending of the build node and the OS.
 	 * 
@@ -571,17 +288,17 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 */
 	private void checkParams(AbstractBuild<?, ?> build, BuildListener listener) 
 			throws IllegalArgumentException, IOException, InterruptedException {
-		zapProgram = retrieveZapHomeWithToolInstall(build, listener);
+		zapProgram = build.getEnvironment(listener).get(zapProxyHome);
 		
 		if(zapProgram == null || zapProgram.isEmpty()) {
 			throw new IllegalArgumentException("zapProgram is missing");
 		} else
 			listener.getLogger().println("zapProgram = " + zapProgram);
 		
-		if(targetURL == null || targetURL.isEmpty()) {
-			throw new IllegalArgumentException("targetURL is missing");
-		} else
-			listener.getLogger().println("targetURL = " + targetURL);
+//		if(targetURL == null || targetURL.isEmpty()) {
+//			throw new IllegalArgumentException("targetURL is missing");
+//		} else
+//			listener.getLogger().println("targetURL = " + targetURL);
 
 		if(zapProxyHost == null || zapProxyHost.isEmpty()) {
 			throw new IllegalArgumentException("zapProxy Host is missing");
@@ -608,8 +325,12 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 * @throws IOException 
 	 * @throws IllegalArgumentException 
 	 */
-	public void startZAP(AbstractBuild<?, ?> build, BuildListener listener, Launcher launcher) 
+	public void startZAP(AbstractBuild<?, ?> build, BuildListener listener, Launcher launcher, boolean startZAPGUI) 
 			throws IllegalArgumentException, IOException, InterruptedException {
+		
+		if (!ZAPUtil.isLocalIP(zapProxyHost))
+			return;
+		
 		checkParams(build, listener);
 		
 		FilePath ws = build.getWorkspace();
@@ -628,7 +349,8 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		// Command to start ZAProxy with parameters
 		List<String> cmd = new ArrayList<String>();
 		cmd.add(zapPathWithProgName.getRemote());
-		cmd.add(CMD_LINE_DAEMON);
+		if (!startZAPGUI)
+			cmd.add(CMD_LINE_DAEMON);
 		cmd.add(CMD_LINE_HOST);
 		cmd.add(zapProxyHost);
 		cmd.add(CMD_LINE_PORT);
@@ -636,17 +358,6 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		cmd.add(CMD_LINE_CONFIG);
 		cmd.add(CMD_LINE_API_KEY + "=" + API_KEY);
 		
-		// Set the default directory used by ZAP if it's defined and if a scan is provided
-		if(scanURL && zapDefaultDir != null && !zapDefaultDir.isEmpty()) {
-			cmd.add(CMD_LINE_DIR);
-			cmd.add(zapDefaultDir);
-		}
-		
-		// Adds command line arguments if it's provided
-		if(!cmdLinesZAP.isEmpty()) {
-			addZapCmdLine(cmd);
-		}
-			
 		EnvVars envVars = build.getEnvironment(listener);
 		// on Windows environment variables are converted to all upper case,
 		// but no such conversions are done on Unix, so to make this cross-platform,
@@ -677,7 +388,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 */
 	private void computeJdkToUse(AbstractBuild<?, ?> build,
 			BuildListener listener, EnvVars env) throws IOException, InterruptedException {
-		JDK jdkToUse = getJdkToUse(build.getProject());
+		JDK jdkToUse = build.getProject().getJDK();
 		if (jdkToUse != null) {
 			Computer computer = Computer.currentComputer();
 			// just in case we are not in a build
@@ -685,32 +396,6 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 				jdkToUse = jdkToUse.forNode(computer.getNode(), listener);
 			}
 			jdkToUse.buildEnvVars(env);
-		}
-	}
-
-	/**
-	 * @return JDK to be used with this project.
-	 */
-	private JDK getJdkToUse(AbstractProject<?, ?> project) {
-		JDK jdkToUse = getJDK();
-		if (jdkToUse == null) {
-			jdkToUse = project.getJDK();
-		}
-		return jdkToUse;
-	}
-	
-	/**
-	 * Add list of command line in the list in param
-	 * @param l the list to attach ZAP command line
-	 */
-	private void addZapCmdLine(List<String> l) {
-		for(ZAPcmdLine zapCmd : cmdLinesZAP) {
-			if(zapCmd.getCmdLineOption() != null && !zapCmd.getCmdLineOption().isEmpty()) {
-				l.add(zapCmd.getCmdLineOption());
-			}
-			if(zapCmd.getCmdLineValue() != null && !zapCmd.getCmdLineValue().isEmpty()) {
-				l.add(zapCmd.getCmdLineValue());
-			}
 		}
 	}
 	
@@ -776,39 +461,6 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	}
 	
 	/**
-	 * Get all security alerts raised by ZAProxy
-	 *
-	 * @param format the report format file
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @return all alerts from ZAProxy in a string
-	 * @throws IOException 
-	 * @throws Exception
-	 */
-	private String getAllAlerts(final String format, BuildListener listener) throws IOException {
-		URL url;
-		String result = "";
-		Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(zapProxyHost, zapProxyPort));
-		
-		url = new URL("http://zap/" + format + "/core/view/alerts");
-
-		listener.getLogger().println("Open URL: " + url.toString());
-
-		final HttpURLConnection uc = (HttpURLConnection) url.openConnection(proxy);
-		uc.connect();
-
-		final BufferedReader in = new BufferedReader(new InputStreamReader(
-				uc.getInputStream()));
-		String inputLine;
-
-		while ((inputLine = in.readLine()) != null) {
-			result = result + inputLine;
-		}
-
-		in.close();
-		return result;
-	}
-	
-	/**
 	 * Generates security report for one format. Reports are saved into build's workspace.
 	 * 
 	 * @param reportFormat the format of the report
@@ -820,81 +472,30 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 */
 	private void saveReport(ZAPreport reportFormat, BuildListener listener, FilePath workspace, 
 			ClientApi clientApi) throws IOException, ClientApiException {
-		final String fullFileName = filenameReports + "." + reportFormat.getFormat();
+		
+		String dateStr = new SimpleDateFormat ("yyyy-MM-dd HH-mm-ss").format(new Date()); 
+		final String fullFileName = String.format("%s_%s.%s", REPORT_PREFIX, dateStr, reportFormat.getFormat());
 		File reportsFile = new File(workspace.getRemote(), fullFileName);
 		FileUtils.writeByteArrayToFile(reportsFile, reportFormat.generateReport(clientApi, API_KEY));
 		listener.getLogger().println("File ["+ reportsFile.getAbsolutePath() +"] saved");
 	}
 
-	/**
-	 * Execute ZAProxy method following build's setup and stop ZAP at the end.
-	 * 
-	 * @param workspace a {@link FilePath} representing the build's workspace
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @return true is no exception is caught, false otherwise.
-	 */
-	public boolean executeZAP(FilePath workspace, BuildListener listener) {
+	public boolean executeZAP(FilePath workspace, BuildListener listener) 
+	{
 		ClientApi zapClientAPI = new ClientApi(zapProxyHost, zapProxyPort);
 		boolean buildSuccess = true;
 		
-		
-		
-		// Try/catch here because I need to stopZAP in finally block and for that,
-		// I need the zapClientAPI created in this method
-		try {
-			/* ======================================================= 
-			 * |                  LOAD SESSION                        |
-			 * ======================================================= 
-			 */
-			if(filenameLoadSession != null && filenameLoadSession.length() != 0) {
-				File sessionFile = new File(filenameLoadSession);
-				listener.getLogger().println("Load session at ["+ sessionFile.getAbsolutePath() +"]");
-				zapClientAPI.core.loadSession(API_KEY, sessionFile.getAbsolutePath());
-			} else {
-				listener.getLogger().println("Skip loadSession");
-			}
+		try 
+		{
+			List<String> urls = getTargetUrls(listener, zapClientAPI);
+			createContext(listener, zapClientAPI, urls);
 			
-			/* ======================================================= 
-			 * |                  SPIDER URL                          |
-			 * ======================================================= 
-			 */
-			if (spiderURL) {
-				listener.getLogger().println("Spider the site [" + targetURL + "]");
-				spiderURL(targetURL, listener, zapClientAPI);
-			} else {
-				listener.getLogger().println("Skip spidering the site [" + targetURL + "]");
-			}
-
-			/* ======================================================= 
-			 * |                AJAX SPIDER URL                       |
-			 * ======================================================= 
-			 */
-			if (ajaxSpiderURL) {
-				listener.getLogger().println("Ajax Spider the site [" + targetURL + "]");
-				ajaxSpiderURL(targetURL, listener, zapClientAPI);
-			} else {
-				listener.getLogger().println("Skip Ajax spidering the site [" + targetURL + "]");
-			}
-
-			/* ======================================================= 
-			 * |                  SPIDER AS USER                      |
-			 * ======================================================= 
-			 */
-			if (spiderAsUser) {
-				listener.getLogger().println("Setting up Authentication");
-				setUpAuthentication(targetURL,listener,zapClientAPI, 
-					username,password,usernameParameter,passwordParameter,loginUrl,loggedInIndicator);
-
-				listener.getLogger().println("Spider the site [" + targetURL + "] as user ["+username+"]");				
-				spiderURLAsUser(targetURL, listener, zapClientAPI, contextId, userId);
-			} else {
-				listener.getLogger().println("Skip spidering the site [" + targetURL + "] as user ["+username+"]");
-			}
-
-			/* ======================================================= 
-			 * |                  SCAN URL                            |
-			 * ======================================================= 
-			 */
+			if (spiderURL)
+				spider(listener, zapClientAPI, urls);
+			
+			if (ajaxSpiderURL)
+				ajaxSpider(listener, zapClientAPI, urls);
+			
 			if (scanURL) {				
 				listener.getLogger().println("Scan the site [" + targetURL + "]");
 				scanURL(targetURL, listener, zapClientAPI);
@@ -902,38 +503,8 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 				listener.getLogger().println("Skip scanning the site [" + targetURL + "]");
 			}
 			
-			/* ======================================================= 
-			 * |                  SAVE REPORTS                        |
-			 * ======================================================= 
-			 */
-			if (saveReports) {			
-				// Generates reports for all formats selected
-				for(String format : chosenFormats) {
-					ZAPreport report = ZAPreportCollection.getInstance().getMapFormatReport().get(format);
-					saveReport(report, listener, workspace, zapClientAPI);
-				}
-			}
-			
-			/* ======================================================= 
-			 * |                  SAVE SESSION                        |
-			 * ======================================================= 
-			 */
-			if(saveSession) {
-				if(filenameSaveSession != null && !filenameSaveSession.isEmpty()) {
-					File sessionFile = new File(workspace.getRemote(), filenameSaveSession);
-					listener.getLogger().println("Save session to ["+ sessionFile.getAbsolutePath() +"]");
-					
-					// Path creation if it doesn't exist
-					if(!sessionFile.getParentFile().exists()) {
-						sessionFile.getParentFile().mkdirs();
-					}
-					
-					// Method signature : saveSession(String apikey, String name, String overwrite)
-					zapClientAPI.core.saveSession(API_KEY, sessionFile.getAbsolutePath(), "true");
-				} 
-			} else {
-				listener.getLogger().println("Skip saveSession");
-			}
+			ZAPreport report = ZAPreportCollection.getInstance().getMapFormatReport().get("html");
+			saveReport(report, listener, workspace, zapClientAPI);
 			
 			listener.getLogger().println("Total alerts = " + zapClientAPI.core.numberOfAlerts("").toString(2));
 			listener.getLogger().println("Total messages = " + zapClientAPI.core.numberOfMessages("").toString(2));
@@ -968,7 +539,6 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 * @param response the ZAP API response code
 	 * @return the String status of the ApiResponse
 	 */
-	@SuppressWarnings("unchecked")
 	private String statusToString(final ApiResponse response) {
 		return ((ApiResponseElement)response).getValue();
 	}
@@ -978,7 +548,6 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 * @param response the ZAP API response code
 	 * @return the user ID of the  user
 	 */
-	@SuppressWarnings("unchecked")
 	private String extractUserId(ApiResponse response) {
 		return ((ApiResponseElement) response).getValue();
 	}
@@ -988,218 +557,241 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 * @param response the ZAP API response code
 	 * @return the context ID of the context
 	 */
-	@SuppressWarnings("unchecked")
 	private String extractContextId(ApiResponse response) {
 		return ((ApiResponseElement) response).getValue();
 	}
 
-	/**
-	 * set up a context and add url to it
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @param URL the URL to be added to context
-	 * @param zapClientAPI the client API to use ZAP API methods
-	 * @return the context ID of the context
-	 * @throws ClientApiException
-	 */
-	private String setUpContext(BuildListener listener,final String url, ClientApi zapClientAPI) 
-				throws ClientApiException {
-
-		String contextName="context1";//name of the Context to be create
-		String contextURL="\\Q"+url+"\\E.*";//url to added to context same url user give to scan
-		String contextIdTemp;
-
-		//Create new context
-		//method signature : newContext(String apikey,String contextname) throws ClientApiException
-		contextIdTemp=extractContextId(zapClientAPI.context.newContext(API_KEY,contextName));
-
-		//add url to the context
-		//method signature : includeInContext(String apikey, String contextname, String regex) 
-		//					 throws ClientApiException
-		zapClientAPI.context.includeInContext(API_KEY,contextName,contextURL);
-
-		listener.getLogger().println("URL "+url+" added to Context ["+contextIdTemp+"]");
+	private void createContext(BuildListener listener, ClientApi zapClientAPI, List<String> targetURLs) throws ClientApiException 
+	{
+		String contextName = "context1";
 		
-		return contextIdTemp;
+		contextId = extractContextId(zapClientAPI.context.newContext(API_KEY, contextName));
+
+		listener.getLogger().println(String.format("Created Context {contextName:%s, contextId:%s}", contextName, contextId));
+		
+		includeUrlToContext(listener, contextName, zapClientAPI, targetURLs);
+		excludeUrlToContext(listener, contextName, zapClientAPI);
+		
+		return;
 	}
-
-	/**
-	 * set up authentication method for the created context
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @param zapClientAPI the client API to use ZAP API methods
-	 * @param loggedInIdicator indication for know its logged in
-	 * @param usernameParameter parameter define in passing username
-	 * @param passwordParameter parameter that define in passing password for the user
-	 * @param contextId id of the creted context
-	 * @param loginUrl login page url
-	 * @throws ClientApiException
-	 * @throws UnsupportedEncodingException
-	 */
-	private void setUpAuthenticationMethod(BuildListener listener, ClientApi zapClientAPI, 
-				String loggedInIndicator, String usernameParameter, String passwordParameter,
-				String contextId, String loginUrl) 
-				throws ClientApiException, UnsupportedEncodingException{
-
-		String loginRequestData = usernameParameter+"={%username%}&"+passwordParameter+"={%password%}";
-
-		// set authentication method 		
-		// Prepare the configuration in a format similar to how URL parameters are formed. This
-		// means that any value we add for the configuration values has to be URL encoded.
-		StringBuilder formBasedConfig = new StringBuilder();
-		formBasedConfig.append("loginUrl=").append(URLEncoder.encode(loginUrl, "UTF-8"));
-		formBasedConfig.append("&loginRequestData=").append(URLEncoder.encode(loginRequestData, "UTF-8"));
-
-		zapClientAPI.authentication.setAuthenticationMethod(API_KEY, contextId, "formBasedAuthentication",
-				formBasedConfig.toString());
+	
+	private List<String> getTargetUrls(BuildListener listener, ClientApi zapClientAPI) throws ClientApiException 
+	{
+		if (targetURL != null && targetURL.trim().length() > 0)
+		{
+			String[] splits = targetURL.split(";|,");
+			return Arrays.asList(splits);
+		}
+		else
+		{
+			return getAllSites(listener, zapClientAPI);
+		}
+	}
+	
+	private List<String> getAllSites(BuildListener listener, ClientApi zapClientAPI) throws ClientApiException 
+	{
+		List<String> targetURLs = new ArrayList<String>();
 		
-		//end set auth method
-		listener.getLogger().println("Form Based Authentication added to context");
-
-		//add logged in idicator
+		ApiResponse response = zapClientAPI.core.sites();
+		List<ApiResponse> items = ((ApiResponseList)response).getItems();
+		
+		for (ApiResponse item : items)
+			targetURLs.add(this.statusToString(item));
+		
+		return targetURLs;
+	}
+	
+	private void includeUrlToContext(BuildListener listener, String contextName, ClientApi zapClientAPI, List<String> targetURLs) throws ClientApiException 
+	{
+		List<String> includeURLsList = getIncludeURLsAsList();
+		includeURLsList.addAll(targetURLs);
+		
+		for (String url : includeURLsList)
+		{
+			url = "\\Q" + url + "\\E.*";
+			zapClientAPI.context.includeInContext(API_KEY, contextName, url);
+			listener.getLogger().println(String.format("URL [%s] include to Context [%s]", url, contextName));
+		}
+	}
+	
+	private void excludeUrlToContext(BuildListener listener, String contextName, ClientApi zapClientAPI) throws ClientApiException 
+	{
+		List<String> excludeURLsList = getExcludeURLsAsList();
+		
+		for (String url : excludeURLsList)
+		{
+			url = "\\Q" + url + "\\E.*";
+			zapClientAPI.context.excludeFromContext(API_KEY, contextName, url);
+			listener.getLogger().println(String.format("URL [%s] exclude to Context [%s]", url, contextName));
+		}
+	}
+	
+	private List<String> getIncludeURLsAsList()
+	{
+		if (includeURLs == null || includeURLs.trim().length() == 0)
+			return new ArrayList<String>();
+		
+		String[] splits = includeURLs.split(";|,");
+		return new ArrayList<String>(Arrays.asList(splits));
+	}
+	
+	private List<String> getExcludeURLsAsList()
+	{
+		if (excludeURLs == null  || excludeURLs.trim().length() == 0)
+			return new ArrayList<String>();
+		
+		String[] splits = excludeURLs.split(";|,");
+		return new ArrayList<String>(Arrays.asList(splits));
+	}
+	
+	private void setUpAuthenticationMethod(BuildListener listener, ClientApi zapClientAPI, String loggedInIndicator, String contextId, ArrayList<AuthenticationStep> authenticationSteps) throws ClientApiException, UnsupportedEncodingException
+	{
+		if (authenticationSteps == null)
+			return;
+			
+		StringBuilder methodConfigParams = new StringBuilder();	
+		StringBuilder jsonAuthenticationSteps = new StringBuilder();
+		
+		methodConfigParams.append("scriptName=").append(SCRIPT_NAME);
+		
+		jsonAuthenticationSteps.append("[");
+		
+		for (int i = 0; i < authenticationSteps.size(); i++)
+		{
+			AuthenticationStep authenticationStep = authenticationSteps.get(i);
+			
+			if (i > 0)
+				jsonAuthenticationSteps.append(",");
+			
+			jsonAuthenticationSteps.append("{");
+			jsonAuthenticationSteps.append("\"method\":\"").append(authenticationStep.getMethod()).append("\"");
+			jsonAuthenticationSteps.append(",\"url\":\"").append(authenticationStep.getUrl()).append("\"");
+			
+			if (authenticationStep.getParameters() != null && authenticationStep.getParameters().trim().length() > 0)
+				jsonAuthenticationSteps.append(",\"parameters\":\"").append(authenticationStep.getParameters()).append("\"");
+			
+			if (authenticationStep.getPostData() != null && authenticationStep.getPostData().trim().length() > 0)
+				jsonAuthenticationSteps.append(",\"postData\":\"").append(authenticationStep.getPostData()).append("\"");
+			
+			if (authenticationStep.getAdditionalHeaders() != null && authenticationStep.getAdditionalHeaders().trim().length() > 0)
+				jsonAuthenticationSteps.append(",\"additionalHeaders\":\"").append(authenticationStep.getAdditionalHeaders()).append("\"");
+			
+			if (authenticationStep.getAdditionalCookies() != null && authenticationStep.getAdditionalCookies().trim().length() > 0)
+				jsonAuthenticationSteps.append(",\"additionalCookies\":\"").append(authenticationStep.getAdditionalCookies()).append("\"");
+			
+			jsonAuthenticationSteps.append("}");
+		}
+		
+		jsonAuthenticationSteps.append("]");
+		
+		methodConfigParams.append("&AuthenticationSteps=").append(URLEncoder.encode(jsonAuthenticationSteps.toString(), "UTF-8"));
+		
+		zapClientAPI.authentication.setAuthenticationMethod(API_KEY, contextId, "scriptBasedAuthentication", methodConfigParams.toString());
+		listener.getLogger().println("Script Based Authentication added to context");
+		
 		zapClientAPI.authentication.setLoggedInIndicator(API_KEY, contextId, loggedInIndicator);
 		listener.getLogger().println("Logged in indicator "+loggedInIndicator+" added to context ");
-
 	}
 
-	/**
-	 * set up user for the context and enable user
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @param zapClientAPI the client API to use ZAP API methods
-	 * @param username user name to be used in authentication
-	 * @param password password for the authentication user
-	 * @param contextId id of the created context
-	 * @return userId id of the newly setup user
-	 * @throws ClientApiException
-	 * @throws UnsupportedEncodingException 
-	 */
-	private String setUpUser(BuildListener listener, ClientApi zapClientAPI, String username,
-						String password, String contextId) 
-						throws ClientApiException, UnsupportedEncodingException {
-
-		String userIdTemp;
-		// add new user and authentication details
-		// Make sure we have at least one user
-		// extract user id 
-		userIdTemp = extractUserId(zapClientAPI.users.newUser(API_KEY, contextId, username));
-
-		// Prepare the configuration in a format similar to how URL parameters are formed. This
-		// means that any value we add for the configuration values has to be URL encoded.
-		StringBuilder userAuthConfig = new StringBuilder();
-		userAuthConfig.append("username=").append(URLEncoder.encode(username, "UTF-8"));
-		userAuthConfig.append("&password=").append(URLEncoder.encode(password, "UTF-8"));
-		String authCon=userAuthConfig.toString();
-		
-		zapClientAPI.users.setAuthenticationCredentials(API_KEY, contextId, userIdTemp, authCon);
-
-		listener.getLogger().println("New user added. username :" +username);
-		
-		zapClientAPI.users.setUserEnabled(API_KEY, contextId,userIdTemp,"true");
-		listener.getLogger().println("User : "+username+" is now Enabled");
-
-		return userIdTemp;
+	private void setUpUser(BuildListener listener, ClientApi zapClientAPI, String username, String password, String contextId) throws ClientApiException 
+	{
+		userId = extractUserId(zapClientAPI.users.newUser(API_KEY, contextId, username));
+		zapClientAPI.users.setUserEnabled(API_KEY, contextId, userId, "true");
 	}
 	
-	/**
-	 * Set up all authentication details
-	 * @author thilina27
-	 * @param username user name to be used in authentication
-	 * @param password password for the authentication user
-	 * @param usernameParameter parameter define in passing username
-	 * @param passwordParameter parameter that define in passing password for the user
-	 * @param loginUrl login page url
-	 * @param loggedInIdicator indication for know its logged in
-	 * @throws ClientApiException
-	 * @throws InterruptedException 
-	 * @throws UnsupportedEncodingException
-	 */
-	private void setUpAuthentication(final String url, BuildListener listener, ClientApi zapClientAPI, 
-				String username, String password, String usernameParameter, 
-				String passwordParameter, String loginUrl, String loggedInIndicator)
-				throws ClientApiException, UnsupportedEncodingException {
-
-		//setup context
-		this.contextId=setUpContext(listener,url,zapClientAPI);
-				
-		//set up authentication method
-		setUpAuthenticationMethod(listener,zapClientAPI,loggedInIndicator,usernameParameter,
-									passwordParameter,contextId,loginUrl);
-
-		//set up user
-		this.userId=setUpUser(listener,zapClientAPI,username,password,contextId);
+	private void spider(BuildListener listener, ClientApi zapClientAPI, List<String> urls)	throws ClientApiException, InterruptedException, UnsupportedEncodingException 
+	{
+		if (authenticationSteps != null && authenticationSteps.size() > 0)
+			spiderWithAuthentication(listener, zapClientAPI, urls);
+		else
+			spiderWithoutAuthentication(listener, zapClientAPI, urls);
 	}
 	
-	/**
-	 * Search for all links and pages on the URL and raised passives alerts
-	 *
-	 * @param url the url to investigate
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @param zapClientAPI the client API to use ZAP API methods
-	 * @throws ClientApiException
-	 * @throws InterruptedException 
-	 */
-	private void spiderURL(final String url, BuildListener listener, ClientApi zapClientAPI) 
-			throws ClientApiException, InterruptedException {
-		// Method signature : scan(String key, String url, String maxChildren, String recurse)
-		zapClientAPI.spider.scan(API_KEY, url, "", "");
-
-		// Wait for complete spidering (equal to 100)
-		// Method signature : status(String scanId)
-		while (statusToInt(zapClientAPI.spider.status("")) < 100) {
-			listener.getLogger().println("Status spider = " + statusToInt(zapClientAPI.spider.status("")) + "%");
-			listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
-			Thread.sleep(1000);
+	private void spiderWithoutAuthentication(BuildListener listener, ClientApi zapClientAPI, List<String> urls) throws ClientApiException, InterruptedException
+	{
+		for (String url : urls)
+		{
+			listener.getLogger().println(String.format("Start to spider the site [%s]", url));
+			ApiResponse response = zapClientAPI.spider.scan(API_KEY, url, "", "");
+			String scanId = this.statusToString(response);
+			
+			while (!isScanFinished(zapClientAPI, scanId, true)) 
+			{
+				listener.getLogger().println("Status spider = " + statusToInt(zapClientAPI.spider.status("")) + "%");
+				listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
+				Thread.sleep(1000);
+			}
+			
+			listener.getLogger().println(String.format("Fininsh spider the site [%s]", url));
 		}
 	}
 
-	/**
-	 * Search for all links and pages on the URL and raised passives alerts
-	 * @author thilina27
-	 * @param url the url to investigate
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @param zapClientAPI the client API to use ZAP API methods
-	 * @throws ClientApiException
-	 * @throws InterruptedException
-	 */
-	 
-	private void spiderURLAsUser(final String url, BuildListener listener, ClientApi zapClientAPI, 
-				String contextId, String userId)
-				throws ClientApiException, InterruptedException {
+	private void spiderWithAuthentication(BuildListener listener, ClientApi zapClientAPI, List<String> urls) throws ClientApiException, InterruptedException, UnsupportedEncodingException 
+	{
+		setUpAuthenticationMethod(listener, zapClientAPI, loggedInIndicator, contextId, authenticationSteps);
+		setUpUser(listener, zapClientAPI, "username", "password", contextId);
 		
-		
-		// Start spider as user
-		zapClientAPI.spider.scanAsUser(API_KEY, url, contextId, userId, "0", "");
-		
-		// Wait for complete spidering (equal to 100)
-		// Method signature : status(String scanId)
-		while (statusToInt(zapClientAPI.spider.status("")) < 100) {
-			listener.getLogger().println("Status spider = " + statusToInt(zapClientAPI.spider.status("")) + "%");
-			listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
-			Thread.sleep(1000);
+		for (String url : urls)
+		{
+			listener.getLogger().println(String.format("Start to spider the site [%s]", url));
+			ApiResponse response = zapClientAPI.spider.scanAsUser(API_KEY, url, this.contextId, userId, "0", "");
+			String scanId = this.statusToString(response);
+			
+			while (!isScanFinished(zapClientAPI, scanId, true)) 
+			{
+				listener.getLogger().println("Status spider = " + statusToInt(zapClientAPI.spider.status("")) + "%");
+				listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
+				Thread.sleep(1000);
+			}
+			
+			listener.getLogger().println(String.format("Fininsh spider the site [%s]", url));
 		}
 	}
 
-	/**
-	 * Search for all links and pages on the URL and raised passives alerts
-	 * @author thilina27
-	 * @param url the url to investigate
-	 * @param listener the listener to display log during the job execution in jenkins
-	 * @param zapClientAPI the client API to use ZAP API methods
-	 * @throws ClientApiException
-	 * @throws InterruptedException 
-	 */
-	private void ajaxSpiderURL(final String url, BuildListener listener, ClientApi zapClientAPI) 
-			throws ClientApiException, InterruptedException{
-
-
-		//Method signature : scan(String apikey,String url,String inscope)
-		zapClientAPI.ajaxSpider.scan(API_KEY, url, "false");
- 		
- 		// Wait for complete spidering (equal to status complete)
-		// Method signature : status(String scanId)
-		while ("running".equalsIgnoreCase(statusToString(zapClientAPI.ajaxSpider.status()))) { 
-		    listener.getLogger().println("Status spider = " + statusToString(zapClientAPI.ajaxSpider.status()));
-			listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
-			Thread.sleep(2500);
-		} 
+	private void ajaxSpider(BuildListener listener, ClientApi zapClientAPI, List<String> urls) throws ClientApiException, InterruptedException
+	{
+		String fieldValues = getFieldValues();
+		
+		for (String url : urls)
+		{
+			listener.getLogger().println(String.format("Start to ajaxSpider the site [%s]", url));
+			
+			Map<String, String> localHashMap = new HashMap<String, String>();
+		    localHashMap.put("apikey", API_KEY);
+		    localHashMap.put("url", url);
+		    localHashMap.put("inScope", "true");
+		    localHashMap.put("fieldValues", fieldValues);
+		    
+			zapClientAPI.callApi("ajaxSpider", "action", "scan", localHashMap);
+			
+			while ("running".equalsIgnoreCase(statusToString(zapClientAPI.ajaxSpider.status()))) { 
+			    listener.getLogger().println("Status spider = " + statusToString(zapClientAPI.ajaxSpider.status()));
+				listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
+				Thread.sleep(2500);
+			} 
+			
+			listener.getLogger().println(String.format("Fininsh ajaxSpider the site [%s]", url));
+		}
+	}
+	
+	private String getFieldValues()
+	{
+		if (this.ajaxSpiderFieldValues == null || this.ajaxSpiderFieldValues.size() == 0)
+			return null;
+		
+		
+		StringBuffer fieldValues = new StringBuffer();
+		for (int i = 0; i < ajaxSpiderFieldValues.size(); i++)
+		{
+			AjaxSpiderFieldValue ajaxSpiderFieldValue = ajaxSpiderFieldValues.get(i);
+			
+			if (i > 0)
+				fieldValues.append("&");
+			
+			fieldValues.append(ajaxSpiderFieldValue.getField()).append("=").append(ajaxSpiderFieldValue.getValue());
+		}
+		
+		return fieldValues.toString();
 	}
 	
 	/**
@@ -1213,25 +805,46 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 */
 	private void scanURL(final String url, BuildListener listener, ClientApi zapClientAPI) 
 			throws ClientApiException, InterruptedException {
-		if(chosenPolicy == null || chosenPolicy.isEmpty()) {
-			listener.getLogger().println("Scan url [" + url + "] with the policy by default");		
-		} else {
-			listener.getLogger().println("Scan url [" + url + "] with the following policy ["
-							+ chosenPolicy + "]");
-		}
-		
 		// Method signature : scan(String apikey, String url, String recurse, String inscopeonly, String scanpolicyname, String method, String postdata)
 		// Use a default policy if chosenPolicy is null or empty
-		zapClientAPI.ascan.scan(API_KEY, url, "true", "false", chosenPolicy, null, null);
-
+		ApiResponse response = zapClientAPI.ascan.scan(API_KEY, url, "true", "false", null, null, null);
+		String scanId = this.statusToString(response);
+		
 		// Wait for complete scanning (equal to 100)
 		// Method signature : status(String scanId)
-		while (statusToInt(zapClientAPI.ascan.status("")) < 100) {
+		while (!isScanFinished(zapClientAPI, scanId, false)) {
 			listener.getLogger().println("Status scan = " + statusToInt(zapClientAPI.ascan.status("")) + "%");
 			listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
 			listener.getLogger().println("Messages number = " + zapClientAPI.core.numberOfMessages("").toString(2));
 			Thread.sleep(5000);
 		}
+	}
+	
+	private boolean isScanFinished(ClientApi zapClientAPI, String scanId, boolean spdier) throws ClientApiException
+	{
+		ApiResponseList response;
+		
+		if (spdier)
+			response = (ApiResponseList)zapClientAPI.spider.scans();
+		else
+			response = (ApiResponseList)zapClientAPI.ascan.scans();
+		
+		List<ApiResponse> items = response.getItems();
+		
+		for (ApiResponse item : items)
+		{
+			ApiResponseSet itemSet = (ApiResponseSet)item;
+			if (!scanId.equals(itemSet.getAttribute("id")))
+				continue;
+			
+			if ("FINISHED".equalsIgnoreCase(itemSet.getAttribute("state")))
+				return true;
+			
+			if ("100".equals(itemSet.getAttribute("progress")))
+				return true;
+		}
+		
+		return false;
 	}
 	
 	/**
@@ -1242,6 +855,9 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 * @throws ClientApiException 
 	 */
 	private void stopZAP(ClientApi zapClientAPI, BuildListener listener) throws ClientApiException {
+		if (!zapProxyLocalLaunch || !ZAPUtil.isLocalIP(zapProxyHost))
+			return;
+		
 		if (zapClientAPI != null) {
 			listener.getLogger().println("Shutdown ZAProxy");
 			//throw new ClientApiException("Exception lancee dans stopZAP");
@@ -1273,20 +889,12 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		 * If you don't want fields to be persisted, use <tt>transient</tt>.
 		 */
 		
-		/** Map where key is the report format represented by a String
-		 *  and value is a ZAPreport object allowing to generate a report with the corresponding format.
-		 */
-		private Map<String, ZAPreport> mapFormatReport;
-		
-		/** Represents the build's workspace */
-		private FilePath workspace;
 		
 		/**
 		 * In order to load the persisted global configuration, you have to
 		 * call load() in the constructor.
 		 */
 		public ZAProxyDescriptorImpl() {
-			mapFormatReport = ZAPreportCollection.getInstance().getMapFormatReport();
 			load();
 		}
 		
@@ -1294,251 +902,9 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		public String getDisplayName() { 
 			return null; 
 		}
-
-		public Map<String, ZAPreport> getMapFormatReport() {
-			return mapFormatReport;
-		}
 		
-		public List<String> getAllFormats() {
-			return new ArrayList<String>(mapFormatReport.keySet());
-		}
-		
-		public void setWorkspace(FilePath ws) {
-			this.workspace = ws;
-		}
-		
-		/**
-		 * Performs on-the-fly validation of the form field 'filenameReports'.
-		 *
-		 * @param filenameReports
-		 *      This parameter receives the value that the user has typed.
-		 * @return
-		 *      Indicates the outcome of the validation. This is sent to the browser.
-		 *      <p>
-		 *      Note that returning {@link FormValidation#error(String)} does not
-		 *      prevent the form from being saved. It just means that a message
-		 *      will be displayed to the user.
-		 */
-		public FormValidation doCheckFilenameReports(@QueryParameter("filenameReports") final String filenameReports) {
-			if(filenameReports.isEmpty())
-				return FormValidation.error("Field is required");
-			if(!FilenameUtils.getExtension(filenameReports).isEmpty())
-				return FormValidation.warning("A file extension is not necessary.");
-			return FormValidation.ok();
-		}
-		
-		/**
-		 * Performs on-the-fly validation of the form field 'filenameSaveSession'.
-		 * <p>
-		 * If the user wants to save session whereas a session is already loaded, 
-		 * the relative path to the saved session must be different from the relative path to the loaded session.
-		 *
-		 * @param filenameLoadSession
-		 *      Parameter to compare with filenameSaveSession.
-		 * @param filenameSaveSession
-		 *      This parameter receives the value that the user has typed.
-		 * @return
-		 *      Indicates the outcome of the validation. This is sent to the browser.
-		 *      <p>
-		 *      Note that returning {@link FormValidation#error(String)} does not
-		 *      prevent the form from being saved. It just means that a message
-		 *      will be displayed to the user.
-		 */
-		public FormValidation doCheckFilenameSaveSession(
-				@QueryParameter("filenameLoadSession") final String filenameLoadSession,
-				@QueryParameter("filenameSaveSession") final String filenameSaveSession) {
-			// Contains just the name of the session (without workspace path and extension)
-			String cleanFilenameLoadSession = null;
-			if(workspace != null) {
-				cleanFilenameLoadSession = filenameLoadSession
-						.replace(workspace.getRemote(), "") // Remove workspace path
-						.replaceFirst("\\\\", "") // Remove separator after workspace path if windows
-						.replaceFirst("/", ""); // Remove separator after workspace path if Unix
-					
-				if(!cleanFilenameLoadSession.isEmpty() && 
-						(filenameSaveSession.equals(cleanFilenameLoadSession) 
-								|| filenameSaveSession.equals(cleanFilenameLoadSession.replace(FILE_SESSION_EXTENSION, ""))) )
-					return FormValidation.error("The saved session filename is the same of the loaded session filename.");
-			}
-			
-			if(!filenameLoadSession.isEmpty())
-				return FormValidation.warning("A session is loaded, so it's not necessary to save session");
-			
-			if(!FilenameUtils.getExtension(filenameSaveSession).isEmpty())
-				return FormValidation.warning("A file extension is not necessary. A default file extension will be added (.session)");
-			return FormValidation.ok();
-		}
-		
-		/**
-		 * List model to choose the alert report format
-		 * 
-		 * @return a {@link ListBoxModel}
-		 */
-		public ListBoxModel doFillChosenFormatsItems() {
-			ListBoxModel items = new ListBoxModel();
-			for(String format: mapFormatReport.keySet()) {
-				items.add(format);
-			}
-			return items;
-		}
-		
-		/**
-		 * List model to choose the tool used (normally, it should be the ZAProxy tool).
-		 * 
-		 * @return a {@link ListBoxModel}
-		 */
-		public ListBoxModel doFillToolUsedItems() {
-			ListBoxModel items = new ListBoxModel();
-			for(ToolDescriptor<?> desc : ToolInstallation.all()) {
-				for (ToolInstallation tool : desc.getInstallations()) {
-					items.add(tool.getName());
-				}
-			}
-			return items;
-		}
-		
-		/**
-		 * List model to choose the policy file to use by ZAProxy scan. It's called on the remote machine (if present)
-		 * to load all policy files in the ZAP default dir of the build's machine.
-		 * 
-		 * @param zapDefaultDir A string that represents an absolute path to the directory that ZAP uses.
-		 * @return a {@link ListBoxModel}. It can be empty if zapDefaultDir doesn't contain any policy file.
-		 */		
-		public ListBoxModel doFillChosenPolicyItems(@QueryParameter String zapDefaultDir) {			
-			ListBoxModel items = new ListBoxModel();
-			
-			// No workspace before the first build, so workspace is null
-			if(workspace != null) {
-				File[] listFiles = {};
-					try {
-						listFiles = workspace.act(new PolicyFileCallable(zapDefaultDir));
-					} catch (IOException e) {
-						// No listener because it's not during a build but it's on the job config page
-						e.printStackTrace();
-					} catch (InterruptedException e) {
-						// No listener because it's not during a build but it's on the job config page
-						e.printStackTrace();
-					}
-					
-				items.add(""); // To not load a policy file, add a blank choice
-				
-				// Add policy files to the list, without their extension
-				for(int i = 0; i < listFiles.length; i++) {
-					items.add(FilenameUtils.getBaseName(listFiles[i].getName()));
-				}
-			}
-		
-			return items;
-		}
-		
-		/**
-		 * List model to choose the ZAP session to use. It's called on the remote machine (if present)
-		 * to load all session files in the build's workspace.
-		 * 
-		 * @return a {@link ListBoxModel}. It can be empty if the workspace doesn't contain any ZAP sessions.
-		 * @throws InterruptedException 
-		 * @throws IOException 
-		 */
-		public ListBoxModel doFillFilenameLoadSessionItems() throws IOException, InterruptedException {
-			ListBoxModel items = new ListBoxModel();
-			
-			// No workspace before the first build, so workspace is null
-			if(workspace != null) {
-				Collection<String> sessionsInString = workspace.act(new FileCallable<Collection<String>>() {
-					private static final long serialVersionUID = 1328740269013881941L;
-	
-					public Collection<String> invoke(File f, VirtualChannel channel) {
-						
-						// List all files with FILE_SESSION_EXTENSION on the machine where the workspace is located
-						Collection<File> colFiles = FileUtils.listFiles(f,
-								FileFilterUtils.suffixFileFilter(FILE_SESSION_EXTENSION),
-								TrueFileFilter.INSTANCE);
-						
-						Collection<String> colString = new ArrayList<String>();
-						
-						// "Transform" File into String
-						for (File file : colFiles) {
-							colString.add(file.getAbsolutePath());
-							// The following line is to remove the full path to the workspace,
-							// keep just the relative path to the session
-							//colString.add(file.getAbsolutePath().replace(workspace.getRemote() + File.separatorChar, ""));
-						}
-						return colString;
-					}
-	
-					@Override
-					public void checkRoles(RoleChecker checker) throws SecurityException {
-						// Nothing to do
-					}
-				});
-			
-				items.add(""); // To not load a session, add a blank choice
-				
-				for (String s : sessionsInString) {
-					items.add(s);
-				}
-			}
-			
-			return items;
-		}
 	}
-	
-	/**
-	 * This class allows to search all ZAP policy files in the ZAP default dir of the remote machine
-	 * (or local machine if there is no remote machine). It's used in the plugin configuration page
-	 * to fill the list of policy files and choose one of them.  
-	 * 
-	 * @author ludovic.roucoux
-	 *
-	 */
-	private static class PolicyFileCallable implements FileCallable<File[]> {
-		private static final long serialVersionUID = 1328740269013881941L;
 		
-		private String zapDefaultDir;
-		
-		public PolicyFileCallable(String zapDefaultDir) {
-			this.zapDefaultDir = zapDefaultDir;
-		}
-
-		public File[] invoke(File f, VirtualChannel channel) {
-			File[] listFiles = {};
-			
-			Path pathPolicyDir = Paths.get(zapDefaultDir, NAME_POLICIES_DIR_ZAP);
-			
-			if(Files.isDirectory(pathPolicyDir)) {
-				File zapPolicyDir = new File(zapDefaultDir, NAME_POLICIES_DIR_ZAP);
-				// create new filename filter (get only file with FILE_POLICY_EXTENSION extension)
-				FilenameFilter policyFilter = new FilenameFilter() {
-
-					@Override
-					public boolean accept(File dir, String name) {
-						if (name.lastIndexOf('.') > 0) {
-							// get last index for '.' char
-							int lastIndex = name.lastIndexOf('.');
-
-							// get extension
-							String str = name.substring(lastIndex);
-
-							// match path name extension
-							if (str.equals(FILE_POLICY_EXTENSION)) {
-								return true;
-							}
-						}
-						return false;
-					}
-				};
-				
-				// returns pathnames for files and directory
-				listFiles = zapPolicyDir.listFiles(policyFilter);
-			}
-			return listFiles;
-		}
-	
-		@Override
-		public void checkRoles(RoleChecker checker) throws SecurityException {
-			// Nothing to do
-		}
-	}
 	
 	/**
 	 * This class allows to launch a method on a remote machine (if there is, otherwise, on a local machine).
@@ -1561,7 +927,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 
 		@Override
 		public Void invoke(File f, VirtualChannel channel) {
-			zaproxy.waitForSuccessfulConnectionToZap(zaproxy.timeoutInSec, listener);
+			zaproxy.waitForSuccessfulConnectionToZap(TimeoutInSec, listener);
 			return null;
 		}
 		

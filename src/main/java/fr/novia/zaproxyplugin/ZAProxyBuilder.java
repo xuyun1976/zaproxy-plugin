@@ -39,6 +39,7 @@ import hudson.slaves.SlaveComputer;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.Builder;
 import net.sf.json.JSONObject;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang.exception.ExceptionUtils;
 import org.jenkinsci.remoting.RoleChecker;
@@ -67,24 +68,36 @@ public class ZAProxyBuilder extends Builder {
 	/** To start ZAP as a prebuild step */
 	private final boolean startZAPFirst;
 	
+	/** To start ZAP with GUI */
+	private final boolean startZAPGUI;
+	
+	/** To set zap proxy */
+	private final boolean autoProxy;
+	
+	/** To Maven Project directory */
+	private final String projectDir;
+	
+	/** Set Test Framework for autoproxy */
+	private final String testFramework;
+	
 	/** The objet to start and call ZAProxy methods */
 	private final ZAProxy zaproxy;
 	
-	/** Host configured when ZAProxy is used as proxy */
-	private final String zapProxyHost;
-	
-	/** Port configured when ZAProxy is used as proxy */
-	private final int zapProxyPort;
-	
 	// Fields in fr/novia/zaproxyplugin/ZAProxyBuilder/config.jelly must match the parameter names in the "DataBoundConstructor"
 	@DataBoundConstructor
-	public ZAProxyBuilder(boolean startZAPFirst, String zapProxyHost, int zapProxyPort, ZAProxy zaproxy) {
+	public ZAProxyBuilder(boolean startZAPFirst, boolean startZAPGUI, boolean autoProxy, String projectDir, String testFramework, ZAProxy zaproxy) {
 		this.startZAPFirst = startZAPFirst;
+		this.startZAPGUI = startZAPGUI;
+		this.autoProxy = autoProxy;
+		this.projectDir = projectDir;
+		this.testFramework = testFramework;
 		this.zaproxy = zaproxy;
-		this.zapProxyHost = zapProxyHost;
-		this.zapProxyPort = zapProxyPort;
-		this.zaproxy.setZapProxyHost(zapProxyHost);
-		this.zaproxy.setZapProxyPort(zapProxyPort);
+		this.zaproxy.setZapProxyHost(getDescriptor().getZapProxyDefaultHost());
+		this.zaproxy.setZapProxyPort(getDescriptor().getZapProxyDefaultPort());
+		this.zaproxy.setZapProxyHome(getDescriptor().getZapProxyDefaultHome());
+		this.zaproxy.setZapProxyLocalLaunch(getDescriptor().getZapProxyLocalLaunch());
+		
+		System.out.println(this.zaproxy.toString());
 	}
 
 	/*
@@ -94,18 +107,26 @@ public class ZAProxyBuilder extends Builder {
 		return startZAPFirst;
 	}
 	
+	public boolean getStartZAPGUI() {
+		return startZAPGUI;
+	}
+	
+	public boolean getAutoProxy() {
+		return autoProxy;
+	}
+	
+	public String getProjectDir() {
+		return projectDir;
+	}
+
+	public String getTestFramework() {
+		return testFramework;
+	}
+
 	public ZAProxy getZaproxy() {
 		return zaproxy;
 	}
 	
-	public String getZapProxyHost() {
-		return zapProxyHost;
-	}
-
-	public int getZapProxyPort() {
-		return zapProxyPort;
-	}
-
 	// Overridden for better type safety.
 	// If your plugin doesn't really define any property on Descriptor,
 	// you don't have to do this.
@@ -116,8 +137,10 @@ public class ZAProxyBuilder extends Builder {
 	
 	// Method called before launching the build
 	public boolean prebuild(AbstractBuild<?, ?> build, BuildListener listener) {
+		if (autoProxy) 
+			new AutoProxy(build, listener, projectDir, testFramework, String.format("%s:%d", getDescriptor().getZapProxyDefaultHost(), getDescriptor().getZapProxyDefaultPort())).setProxy();
 		
-		if(startZAPFirst) {
+		if(getDescriptor().getZapProxyLocalLaunch() && startZAPFirst) {
 			listener.getLogger().println("------- START Prebuild -------");
 			
 			try {
@@ -137,7 +160,7 @@ public class ZAProxyBuilder extends Builder {
 					}
 					launcher = new RemoteLauncher(listener, build.getWorkspace().getChannel(), isUnix);
 				}		
-				zaproxy.startZAP(build, listener, launcher);
+				zaproxy.startZAP(build, listener, launcher, startZAPGUI);
 			} catch (Exception e) {
 				e.printStackTrace();
 				listener.error(ExceptionUtils.getStackTrace(e));
@@ -145,6 +168,7 @@ public class ZAProxyBuilder extends Builder {
 			}
 			listener.getLogger().println("------- END Prebuild -------");
 		}
+		
 		return true;
 	}
 
@@ -154,9 +178,9 @@ public class ZAProxyBuilder extends Builder {
 		
 		listener.getLogger().println("Perform ZAProxy");
 		
-		if(!startZAPFirst) {
+		if(getDescriptor().getZapProxyLocalLaunch() && !startZAPFirst) {
 			try {
-				zaproxy.startZAP(build, listener, launcher);
+				zaproxy.startZAP(build, listener, launcher, startZAPGUI);
 			} catch (Exception e) {
 				e.printStackTrace();
 				listener.error(ExceptionUtils.getStackTrace(e));
@@ -177,67 +201,6 @@ public class ZAProxyBuilder extends Builder {
 	}
 	
 	/**
-	 * Copy local policy file to slave in policies directory of ZAP default directory.
-	 * 
-	 * @param workspace the workspace of the build
-	 * @param listener
-	 * @throws IOException
-	 * @throws InterruptedException
-	 */
-	private void copyPolicyFile(FilePath workspace, BuildListener listener) throws IOException, InterruptedException {
-		//if(zaproxy.getScanURL() && zaproxy.pathToLocalPolicy != null && !zaproxy.pathToLocalPolicy.isEmpty())
-		// TODO a recup via un champ
-		// File fileToCopy = new File(zaproxy.pathToLocalPolicy);
-		File fileToCopy = new File("C:\\Users\\ludovic.roucoux\\OWASP ZAP\\policies\\OnlySQLInjection.policy");
-		
-		String stringForLogger = "Copy [" + fileToCopy.getAbsolutePath() + "] to ";
-		
-		String data = FileUtils.readFileToString(fileToCopy, (String)null);
-		
-		stringForLogger = workspace.act(new CopyFileCallable(data, zaproxy.getZapDefaultDir(),
-				fileToCopy.getName(), stringForLogger));
-		listener.getLogger().println(stringForLogger);
-	}
-	
-	/**
-	 * Allows to copy local policy file to the default ZAP policies directory in slave.
-	 * 
-	 * @author ludovic.roucoux
-	 *
-	 */
-	private static class CopyFileCallable implements FileCallable<String> {
-		private static final long serialVersionUID = -3375349701206827354L;
-		private String data;
-		private String zapDefaultDir;
-		private String copyFilename;
-		private String stringForLogger;
-		
-		public CopyFileCallable(String data, String zapDefaultDir,
-				String copyFilename, String stringForLogger) {
-			this.data = data;
-			this.zapDefaultDir = zapDefaultDir;
-			this.copyFilename = copyFilename;
-			this.stringForLogger = stringForLogger;
-		}
-
-		public String invoke(File f, VirtualChannel channel) throws IOException, InterruptedException {
-			File fileCopiedDir = new File(zapDefaultDir, ZAProxy.NAME_POLICIES_DIR_ZAP);
-			File fileCopied = new File(fileCopiedDir, copyFilename);
-			
-			FileUtils.writeStringToFile(fileCopied, data);
-			stringForLogger += "[" + fileCopied.getAbsolutePath() + "]";
-			return stringForLogger;
-		}
-
-		@Override
-		public void checkRoles(RoleChecker checker) throws SecurityException {
-			// Nothing to do
-		}
-	}
-	
-	
-
-	/**
 	 * Descriptor for {@link ZAProxyBuilder}. Used as a singleton.
 	 * The class is marked as public so that it can be accessed from views.
 	 *
@@ -256,6 +219,8 @@ public class ZAProxyBuilder extends Builder {
 		 */
 		private String zapProxyDefaultHost;
 		private int zapProxyDefaultPort;
+		private String zapProxyDefaultHome;
+		private boolean zapProxyLocalLaunch;
 
 		/**
 		 * In order to load the persisted global configuration, you have to
@@ -276,7 +241,7 @@ public class ZAProxyBuilder extends Builder {
 		 */
 		@Override
 		public String getDisplayName() {
-			return "Execute ZAProxy";
+			return "Penetration Test";
 		}
 
 		@Override
@@ -285,6 +250,8 @@ public class ZAProxyBuilder extends Builder {
 			// set that to properties and call save().
 			zapProxyDefaultHost = formData.getString("zapProxyDefaultHost");
 			zapProxyDefaultPort = formData.getInt("zapProxyDefaultPort");
+			zapProxyDefaultHome = formData.getString("zapProxyDefaultHome");
+			zapProxyLocalLaunch = formData.getBoolean("zapProxyLocalLaunch");
 			// ^Can also use req.bindJSON(this, formData);
 			//  (easier when there are many fields; need set* methods for this, like setUseFrench)
 			save();
@@ -299,6 +266,15 @@ public class ZAProxyBuilder extends Builder {
 			return zapProxyDefaultPort;
 		}
 
+		public String getZapProxyDefaultHome() {
+			return zapProxyDefaultHome;
+		}
+
+		public boolean getZapProxyLocalLaunch() {
+			return zapProxyLocalLaunch;
+		}
+
+		
 	}
 	
 	/**
