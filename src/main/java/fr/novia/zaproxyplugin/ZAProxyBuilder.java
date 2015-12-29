@@ -137,6 +137,12 @@ public class ZAProxyBuilder extends Builder {
 	
 	// Method called before launching the build
 	public boolean prebuild(AbstractBuild<?, ?> build, BuildListener listener) {
+		
+		this.zaproxy.setZapProxyHost(getDescriptor().getZapProxyDefaultHost());
+		this.zaproxy.setZapProxyPort(getDescriptor().getZapProxyDefaultPort());
+		this.zaproxy.setZapProxyHome(getDescriptor().getZapProxyDefaultHome());
+		this.zaproxy.setZapProxyLocalLaunch(getDescriptor().getZapProxyLocalLaunch());
+		
 		if (autoProxy) 
 			new AutoProxy(build, listener, projectDir, testFramework, String.format("%s:%d", getDescriptor().getZapProxyDefaultHost(), getDescriptor().getZapProxyDefaultPort())).setProxy();
 		
