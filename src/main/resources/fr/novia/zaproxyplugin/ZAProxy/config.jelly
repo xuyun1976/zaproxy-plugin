@@ -37,17 +37,26 @@ SOFTWARE.
 			<f:textbox/>
 		</f:entry>
 		
-		<f:optionalBlock title="${%Spider URL}" field="spiderURL" inline="true">
-			<f:advanced title="${%Authentication}">
+		<f:optionalBlock title="${%Authentication}" field="authentication" inline="true">
+			<block>
 				<f:entry title="${%Login Indicator}" field="loggedInIndicator">
 					<f:textbox />
 				</f:entry>
 		
-				<f:block>
-					<f:repeatableProperty field="authenticationSteps" add="${%Add Authentication Step}"/>
-				</f:block>
-			</f:advanced>
+				<f:entry title="${%Logout Indicator}" field="loggedOutIndicator">
+					<f:textbox />
+				</f:entry>
+				
+			</block>
+			
+			<f:block>
+				<f:repeatableProperty field="authenticationSteps" header="Authentication Steps" minimum="1" add="${%Add Authentication Step}"/>
+			</f:block>
+			
 		</f:optionalBlock>
+	
+		
+		<f:optionalBlock title="${%Spider URL}" field="spiderURL" inline="true"/>
 		
 		<f:optionalBlock title="${%Spider by Selenium}" field="ajaxSpiderURL" inline="true" >
 			<f:advanced>

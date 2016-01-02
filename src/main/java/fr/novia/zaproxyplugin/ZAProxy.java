@@ -135,10 +135,14 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	
 	private final boolean ajaxSpiderURL;
 	
+	private final boolean authentication;
 
 	/** logged in indication*/
 	private final String loggedInIndicator;
 
+	/** logged out indication*/
+	private final String loggedOutIndicator;
+	
 	/** Id of the newly created context*/
 	private String contextId;
 
@@ -152,18 +156,19 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	private final ArrayList<AjaxSpiderFieldValue> ajaxSpiderFieldValues;
 	
 	@DataBoundConstructor
-	public ZAProxy(String targetURL, String includeURLs,  String excludeURLs, boolean spiderURL, boolean scanURL, boolean authentication, List<AuthenticationStep> authenticationSteps, String loggedInIndicator, boolean ajaxSpiderURL, List<AjaxSpiderFieldValue> ajaxSpiderFieldValues) {
+	public ZAProxy(String targetURL, String includeURLs,  String excludeURLs, boolean spiderURL, boolean scanURL, boolean authentication, List<AuthenticationStep> authenticationSteps, String loggedInIndicator, String loggedOutIndicator, boolean ajaxSpiderURL, List<AjaxSpiderFieldValue> ajaxSpiderFieldValues) {
 		this.targetURL = targetURL;
 		this.includeURLs = includeURLs;
 		this.excludeURLs = excludeURLs;
 		this.spiderURL = spiderURL;
 		this.scanURL = scanURL;
 		this.ajaxSpiderURL = ajaxSpiderURL;
-		
-		this.authenticationSteps = authenticationSteps != null ? new ArrayList<AuthenticationStep>(authenticationSteps) : new ArrayList<AuthenticationStep>();
-		this.ajaxSpiderFieldValues = ajaxSpiderFieldValues != null ? new ArrayList<AjaxSpiderFieldValue>(ajaxSpiderFieldValues) : new ArrayList<AjaxSpiderFieldValue>();
-		
+		this.authentication = authentication;
 		this.loggedInIndicator = loggedInIndicator;
+		this.loggedOutIndicator = loggedOutIndicator;
+
+		this.authenticationSteps = authenticationSteps != null ? new ArrayList<AuthenticationStep>(authenticationSteps) : new ArrayList<AuthenticationStep>();
+		this.ajaxSpiderFieldValues = ajaxSpiderFieldValues != null ? new ArrayList<AjaxSpiderFieldValue>(ajaxSpiderFieldValues) : new ArrayList<AjaxSpiderFieldValue>();		
 	}
 	
 	@Override
@@ -173,6 +178,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		s += "targetURL ["+targetURL+"]\n";
 		s += "spiderURL ["+spiderURL+"]\n";
 		s += "loggedInIndicator ["+loggedInIndicator+"]\n";
+		s += "loggedOutIndicator ["+loggedOutIndicator+"]\n";
 		s += "scanURL ["+scanURL+"]\n";
 		s += "zapProxyHost ["+zapProxyHost+"]\n";
 		s += "zapProxyPort ["+zapProxyPort+"]\n";
@@ -243,8 +249,16 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		return ajaxSpiderFieldValues;
 	}
 
+	public boolean getAuthentication() {
+		return authentication;
+	}
+
 	public String getLoggedInIndicator() {
 		return loggedInIndicator;
+	}
+
+	public String getLoggedOutIndicator() {
+		return loggedOutIndicator;
 	}
 
 	/**
@@ -488,7 +502,13 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		try 
 		{
 			List<String> urls = getTargetUrls(listener, zapClientAPI);
-			createContext(listener, zapClientAPI, urls);
+			this.contextId = createContext(listener, zapClientAPI, urls);
+			
+			if (authentication)
+			{
+				setUpAuthenticationMethod(listener, zapClientAPI);
+				this.userId = setUpUser(listener, zapClientAPI, "username", "password", contextId);
+			}
 			
 			if (spiderURL)
 				spider(listener, zapClientAPI, urls);
@@ -561,18 +581,18 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		return ((ApiResponseElement) response).getValue();
 	}
 
-	private void createContext(BuildListener listener, ClientApi zapClientAPI, List<String> targetURLs) throws ClientApiException 
+	private String createContext(BuildListener listener, ClientApi zapClientAPI, List<String> targetURLs) throws ClientApiException 
 	{
 		String contextName = "context1";
 		
-		contextId = extractContextId(zapClientAPI.context.newContext(API_KEY, contextName));
+		String contextId = extractContextId(zapClientAPI.context.newContext(API_KEY, contextName));
 
 		listener.getLogger().println(String.format("Created Context {contextName:%s, contextId:%s}", contextName, contextId));
 		
 		includeUrlToContext(listener, contextName, zapClientAPI, targetURLs);
 		excludeUrlToContext(listener, contextName, zapClientAPI);
 		
-		return;
+		return contextId;
 	}
 	
 	private List<String> getTargetUrls(BuildListener listener, ClientApi zapClientAPI) throws ClientApiException 
@@ -644,7 +664,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		return new ArrayList<String>(Arrays.asList(splits));
 	}
 	
-	private void setUpAuthenticationMethod(BuildListener listener, ClientApi zapClientAPI, String loggedInIndicator, String contextId, ArrayList<AuthenticationStep> authenticationSteps) throws ClientApiException, UnsupportedEncodingException
+	private void setUpAuthenticationMethod(BuildListener listener, ClientApi zapClientAPI) throws ClientApiException, UnsupportedEncodingException
 	{
 		if (authenticationSteps == null)
 			return;
@@ -689,65 +709,58 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		zapClientAPI.authentication.setAuthenticationMethod(API_KEY, contextId, "scriptBasedAuthentication", methodConfigParams.toString());
 		listener.getLogger().println("Script Based Authentication added to context");
 		
-		zapClientAPI.authentication.setLoggedInIndicator(API_KEY, contextId, loggedInIndicator);
-		listener.getLogger().println("Logged in indicator "+loggedInIndicator+" added to context ");
+		if (loggedInIndicator != null && loggedInIndicator.trim().length() > 0)
+		{
+			zapClientAPI.authentication.setLoggedInIndicator(API_KEY, contextId, "\\Q" + loggedInIndicator + "\\E.*");
+			listener.getLogger().println("Logged in indicator " + loggedInIndicator + " added to context ");
+		}
+		
+		if (loggedOutIndicator != null && loggedOutIndicator.trim().length() > 0)
+		{
+			zapClientAPI.authentication.setLoggedOutIndicator(API_KEY, contextId, "\\Q" + loggedOutIndicator + "\\E.*");
+			listener.getLogger().println("Logged out indicator " + loggedInIndicator+ " added to context ");
+		}
 	}
 
-	private void setUpUser(BuildListener listener, ClientApi zapClientAPI, String username, String password, String contextId) throws ClientApiException 
+	private String setUpUser(BuildListener listener, ClientApi zapClientAPI, String username, String password, String contextId) throws ClientApiException, UnsupportedEncodingException 
 	{
-		userId = extractUserId(zapClientAPI.users.newUser(API_KEY, contextId, username));
+		String userId = extractUserId(zapClientAPI.users.newUser(API_KEY, contextId, username));
 		zapClientAPI.users.setUserEnabled(API_KEY, contextId, userId, "true");
+		
+		StringBuilder userAuthConfig = new StringBuilder();
+		userAuthConfig.append("Username=").append(URLEncoder.encode(username, "UTF-8"));
+		userAuthConfig.append("&Password=").append(URLEncoder.encode(password, "UTF-8"));
+		String authCon=userAuthConfig.toString();
+		
+		zapClientAPI.users.setAuthenticationCredentials(API_KEY, contextId, userId, authCon);
+		
+		return userId;
 	}
 	
 	private void spider(BuildListener listener, ClientApi zapClientAPI, List<String> urls)	throws ClientApiException, InterruptedException, UnsupportedEncodingException 
-	{
-		if (authenticationSteps != null && authenticationSteps.size() > 0)
-			spiderWithAuthentication(listener, zapClientAPI, urls);
-		else
-			spiderWithoutAuthentication(listener, zapClientAPI, urls);
+	{	
+		for (String url : urls)
+		{
+			listener.getLogger().println(String.format("Start to spider the site [%s]", url));
+			
+			ApiResponse response;
+			if (authentication && authenticationSteps.size() > 0)
+				response = zapClientAPI.spider.scanAsUser(API_KEY, url, this.contextId, userId, "0", "");
+			else
+				response = zapClientAPI.spider.scan(API_KEY, url, "", "");
+			
+			String scanId = this.statusToString(response);
+			while (!isScanFinished(zapClientAPI, scanId, true)) 
+			{
+				listener.getLogger().println("Status spider = " + statusToInt(zapClientAPI.spider.status("")) + "%");
+				listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
+				Thread.sleep(1000);
+			}
+			
+			listener.getLogger().println(String.format("Fininsh spider the site [%s]", url));
+		}
 	}
 	
-	private void spiderWithoutAuthentication(BuildListener listener, ClientApi zapClientAPI, List<String> urls) throws ClientApiException, InterruptedException
-	{
-		for (String url : urls)
-		{
-			listener.getLogger().println(String.format("Start to spider the site [%s]", url));
-			ApiResponse response = zapClientAPI.spider.scan(API_KEY, url, "", "");
-			String scanId = this.statusToString(response);
-			
-			while (!isScanFinished(zapClientAPI, scanId, true)) 
-			{
-				listener.getLogger().println("Status spider = " + statusToInt(zapClientAPI.spider.status("")) + "%");
-				listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
-				Thread.sleep(1000);
-			}
-			
-			listener.getLogger().println(String.format("Fininsh spider the site [%s]", url));
-		}
-	}
-
-	private void spiderWithAuthentication(BuildListener listener, ClientApi zapClientAPI, List<String> urls) throws ClientApiException, InterruptedException, UnsupportedEncodingException 
-	{
-		setUpAuthenticationMethod(listener, zapClientAPI, loggedInIndicator, contextId, authenticationSteps);
-		setUpUser(listener, zapClientAPI, "username", "password", contextId);
-		
-		for (String url : urls)
-		{
-			listener.getLogger().println(String.format("Start to spider the site [%s]", url));
-			ApiResponse response = zapClientAPI.spider.scanAsUser(API_KEY, url, this.contextId, userId, "0", "");
-			String scanId = this.statusToString(response);
-			
-			while (!isScanFinished(zapClientAPI, scanId, true)) 
-			{
-				listener.getLogger().println("Status spider = " + statusToInt(zapClientAPI.spider.status("")) + "%");
-				listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
-				Thread.sleep(1000);
-			}
-			
-			listener.getLogger().println(String.format("Fininsh spider the site [%s]", url));
-		}
-	}
-
 	private void ajaxSpider(BuildListener listener, ClientApi zapClientAPI, List<String> urls) throws ClientApiException, InterruptedException
 	{
 		String fieldValues = getFieldValues();
@@ -807,7 +820,12 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 			throws ClientApiException, InterruptedException {
 		// Method signature : scan(String apikey, String url, String recurse, String inscopeonly, String scanpolicyname, String method, String postdata)
 		// Use a default policy if chosenPolicy is null or empty
-		ApiResponse response = zapClientAPI.ascan.scan(API_KEY, url, "true", "false", null, null, null);
+		ApiResponse response;
+		if (authentication && authenticationSteps.size() > 0)
+			response = zapClientAPI.ascan.scanAsUser(API_KEY, url, contextId, userId, "true", "Default policy", "", "");
+		else
+			response = zapClientAPI.ascan.scan(API_KEY, url, "true", "false", "", "", "");
+		
 		String scanId = this.statusToString(response);
 		
 		// Wait for complete scanning (equal to 100)
