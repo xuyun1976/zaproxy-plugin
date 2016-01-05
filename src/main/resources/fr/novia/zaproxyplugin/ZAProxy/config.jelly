@@ -57,11 +57,15 @@ SOFTWARE.
 	
 		
 		<f:optionalBlock title="${%Spider URL}" field="spiderURL" inline="true"/>
-		
+		 
 		<f:optionalBlock title="${%Spider by Selenium}" field="ajaxSpiderURL" inline="true" >
+			<f:entry title="${%Click Elements}" field="clickElements">
+				<f:textbox  default="A;INPUT;BUTTON"/>
+			</f:entry>
+				
 			<f:advanced>
 				<f:block>
-					<f:repeatableProperty field="ajaxSpiderFieldValues" add="${%Add Field-Value}"/>
+					<f:repeatableProperty field="ajaxSpiderFieldValues" minimum="1" add="${%Add Field-Value}"/>
 				</f:block>
 			</f:advanced>
 		</f:optionalBlock>

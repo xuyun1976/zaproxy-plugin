@@ -152,11 +152,13 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	/** Realize a url scan or not by ZAProxy */
 	private final boolean scanURL;
 	
+	private final String clickElements;
+	
 	private final ArrayList<AuthenticationStep> authenticationSteps;
 	private final ArrayList<AjaxSpiderFieldValue> ajaxSpiderFieldValues;
 	
 	@DataBoundConstructor
-	public ZAProxy(String targetURL, String includeURLs,  String excludeURLs, boolean spiderURL, boolean scanURL, boolean authentication, List<AuthenticationStep> authenticationSteps, String loggedInIndicator, String loggedOutIndicator, boolean ajaxSpiderURL, List<AjaxSpiderFieldValue> ajaxSpiderFieldValues) {
+	public ZAProxy(String targetURL, String includeURLs,  String excludeURLs, boolean spiderURL, boolean scanURL, boolean authentication, List<AuthenticationStep> authenticationSteps, String loggedInIndicator, String loggedOutIndicator, boolean ajaxSpiderURL, String clickElements, List<AjaxSpiderFieldValue> ajaxSpiderFieldValues) {
 		this.targetURL = targetURL;
 		this.includeURLs = includeURLs;
 		this.excludeURLs = excludeURLs;
@@ -166,6 +168,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		this.authentication = authentication;
 		this.loggedInIndicator = loggedInIndicator;
 		this.loggedOutIndicator = loggedOutIndicator;
+		this.clickElements = clickElements;
 
 		this.authenticationSteps = authenticationSteps != null ? new ArrayList<AuthenticationStep>(authenticationSteps) : new ArrayList<AuthenticationStep>();
 		this.ajaxSpiderFieldValues = ajaxSpiderFieldValues != null ? new ArrayList<AjaxSpiderFieldValue>(ajaxSpiderFieldValues) : new ArrayList<AjaxSpiderFieldValue>();		
@@ -177,8 +180,13 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		s += "zapProxyHome ["+zapProxyHome+"]\n";
 		s += "targetURL ["+targetURL+"]\n";
 		s += "spiderURL ["+spiderURL+"]\n";
+		s += "authentication ["+authentication+"]\n";
+		s += "includeURLs ["+includeURLs+"]\n";
+		s += "excludeURLs ["+excludeURLs+"]\n";
 		s += "loggedInIndicator ["+loggedInIndicator+"]\n";
 		s += "loggedOutIndicator ["+loggedOutIndicator+"]\n";
+		s += "ajaxSpiderURL ["+ajaxSpiderURL+"]\n";
+		s += "clickElements ["+clickElements+"]\n";
 		s += "scanURL ["+scanURL+"]\n";
 		s += "zapProxyHost ["+zapProxyHost+"]\n";
 		s += "zapProxyPort ["+zapProxyPort+"]\n";
@@ -243,6 +251,10 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 
 	public boolean isAjaxSpiderURL() {
 		return ajaxSpiderURL;
+	}
+
+	public String getClickElements() {
+		return clickElements;
 	}
 
 	public ArrayList<AjaxSpiderFieldValue> getAjaxSpiderFieldValues() {
@@ -496,7 +508,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 
 	public boolean executeZAP(FilePath workspace, BuildListener listener) 
 	{
-		ClientApi zapClientAPI = new ClientApi(zapProxyHost, zapProxyPort);
+		ClientApi zapClientAPI = new ClientApi(zapProxyHost, zapProxyPort, false);
 		boolean buildSuccess = true;
 		
 		try 
@@ -518,7 +530,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 			
 			if (scanURL) {				
 				listener.getLogger().println("Scan the site [" + targetURL + "]");
-				scanURL(targetURL, listener, zapClientAPI);
+				scanURL(urls, listener, zapClientAPI);
 			} else {
 				listener.getLogger().println("Skip scanning the site [" + targetURL + "]");
 			}
@@ -774,6 +786,7 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 		    localHashMap.put("url", url);
 		    localHashMap.put("inScope", "true");
 		    localHashMap.put("fieldValues", fieldValues);
+		    localHashMap.put("clickElements", clickElements);
 		    
 			zapClientAPI.callApi("ajaxSpider", "action", "scan", localHashMap);
 			
@@ -816,25 +829,28 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 * @throws ClientApiException
 	 * @throws InterruptedException 
 	 */
-	private void scanURL(final String url, BuildListener listener, ClientApi zapClientAPI) 
+	private void scanURL(final List<String> urls, BuildListener listener, ClientApi zapClientAPI) 
 			throws ClientApiException, InterruptedException {
 		// Method signature : scan(String apikey, String url, String recurse, String inscopeonly, String scanpolicyname, String method, String postdata)
 		// Use a default policy if chosenPolicy is null or empty
-		ApiResponse response;
-		if (authentication && authenticationSteps.size() > 0)
-			response = zapClientAPI.ascan.scanAsUser(API_KEY, url, contextId, userId, "true", "Default policy", "", "");
-		else
-			response = zapClientAPI.ascan.scan(API_KEY, url, "true", "false", "", "", "");
-		
-		String scanId = this.statusToString(response);
-		
-		// Wait for complete scanning (equal to 100)
-		// Method signature : status(String scanId)
-		while (!isScanFinished(zapClientAPI, scanId, false)) {
-			listener.getLogger().println("Status scan = " + statusToInt(zapClientAPI.ascan.status("")) + "%");
-			listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
-			listener.getLogger().println("Messages number = " + zapClientAPI.core.numberOfMessages("").toString(2));
-			Thread.sleep(5000);
+		for (String url : urls)
+		{
+			ApiResponse response;
+			if (authentication && authenticationSteps.size() > 0)
+				response = zapClientAPI.ascan.scanAsUser(API_KEY, url, contextId, userId, "true", "Default policy", "", "");
+			else
+				response = zapClientAPI.ascan.scan(API_KEY, url, "true", "false", "", "", "");
+			
+			String scanId = this.statusToString(response);
+			
+			// Wait for complete scanning (equal to 100)
+			// Method signature : status(String scanId)
+			while (!isScanFinished(zapClientAPI, scanId, false)) {
+				listener.getLogger().println("Status scan = " + statusToInt(zapClientAPI.ascan.status("")) + "%");
+				listener.getLogger().println("Alerts number = " + zapClientAPI.core.numberOfAlerts("").toString(2));
+				listener.getLogger().println("Messages number = " + zapClientAPI.core.numberOfMessages("").toString(2));
+				Thread.sleep(5000);
+			}
 		}
 	}
 	
@@ -873,15 +889,22 @@ public class ZAProxy extends AbstractDescribableImpl<ZAProxy> implements Seriali
 	 * @throws ClientApiException 
 	 */
 	private void stopZAP(ClientApi zapClientAPI, BuildListener listener) throws ClientApiException {
-		if (!zapProxyLocalLaunch || !ZAPUtil.isLocalIP(zapProxyHost))
-			return;
 		
-		if (zapClientAPI != null) {
-			listener.getLogger().println("Shutdown ZAProxy");
-			//throw new ClientApiException("Exception lancee dans stopZAP");
-			zapClientAPI.core.shutdown(API_KEY);
-		} else {
+		if (zapClientAPI == null)
+		{
 			listener.getLogger().println("No shutdown of ZAP (zapClientAPI==null)");
+			return;
+		}
+		
+		if (!zapProxyLocalLaunch || !ZAPUtil.isLocalIP(zapProxyHost))
+		{
+			listener.getLogger().println("Reset ZAProxy");
+			//zapClientAPI.core.newSession(API_KEY, "", "");
+		}
+		else
+		{
+			listener.getLogger().println("Shutdown ZAProxy");
+			zapClientAPI.core.shutdown(API_KEY);
 		}
 	}
 	

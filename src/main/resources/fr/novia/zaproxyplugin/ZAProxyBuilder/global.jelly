@@ -42,7 +42,7 @@ SOFTWARE.
 		</f:entry>
 
 		<f:entry title="${%ZAProxy Port}" field="zapProxyDefaultPort">
-			<f:number default="8090" clazz="required positive-number" />
+			<f:number default="8008" clazz="required positive-number" />
 		</f:entry>
 		
 		<f:optionalBlock title="${%Lunch Local ZAProxy}" field="zapProxyLocalLaunch" inline="true">
